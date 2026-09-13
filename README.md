@@ -1,3 +1,4 @@
+
 # Hello Watt pour Home Assistant
 
 [![Ajouter le dépôt à Home Assistant](https://my.home-assistant.io/badges/supervisor_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_addon_repository/?repository=https%3A%2F%2Fgithub.com%2Felmomotito%2Fhomeassistant-hellowatt)
@@ -52,6 +53,8 @@ La consommation réseau n’inclut pas l’électricité solaire consommée dire
 ![Exemple de dashboard Home Assistant : coûts, tarifs Tempo et statistiques solaires](docs/images/dashboard-hellowatt.png)
 
 *Exemple d’affichage avec une carte personnalisée distincte du collecteur.*
+
+<img width="1366" height="1024" alt="IMG_0594" src="https://github.com/user-attachments/assets/b1a4fb85-bde2-4027-b1cd-396b7807d6ea" />
 
 ## Prérequis
 
