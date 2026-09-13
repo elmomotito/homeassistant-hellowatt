@@ -1,10 +1,10 @@
 # Hello Watt pour Home Assistant
 
-Récupérez vos données Hello Watt dans Home Assistant : **coût électrique abonnement inclus, revenu d’injection solaire, consommation réseau et énergie injectée**, avec le détail par jour, par mois et par année.
+Récupérez vos données Hello Watt dans Home Assistant : **coût électrique abonnement inclus, revenu d’injection, consommation réseau, injection et production solaire en kWh, valorisation solaire en euros et détail des six tarifs Tempo**, avec le détail par jour, par mois et par année.
 
 Le collecteur se connecte une fois par jour, enregistre les données dans une base locale et publie les capteurs via MQTT. L’historique commence le **1er janvier 2026** et les années précédentes sont conservées.
 
-> Projet personnel non officiel, indépendant de Hello Watt. Il utilise les requêtes du site connecté, qui peuvent évoluer. Version décrite : **0.3.0**.
+> Projet personnel non officiel, indépendant de Hello Watt. Il utilise les requêtes du site connecté, qui peuvent évoluer. Version décrite : **0.5.0**.
 
 ## Sommaire
 
@@ -20,6 +20,9 @@ Le collecteur se connecte une fois par jour, enregistre les données dans une ba
 - [Dépannage](#dépannage)
 - [Fonctionnement technique](#fonctionnement-technique)
 - [État des validations](#état-des-validations)
+- [Production solaire](#production-solaire--version-040)
+- [Horaire quotidien](#horaire--version-041)
+- [Détail Tempo et mise à jour 0.5.0](#couleurs-tempo--version-050)
 
 ## Fonctionnalités
 
@@ -30,8 +33,12 @@ Le collecteur se connecte une fois par jour, enregistre les données dans une ba
 | Revenu de l’électricité injectée | € | Jour, mois, année |
 | Électricité consommée sur le réseau | kWh | Jour, mois, année |
 | Électricité injectée sur le réseau | kWh | Jour, mois, année |
+| Production solaire totale | kWh | Jour, mois, année |
+| Valorisation de la production solaire fournie par Hello Watt | € | Jour, mois, année |
+| Détail Tempo : bleu/blanc/rouge × HP/HC | € et kWh | Attributs journaliers ; agrégeables par mois et année |
 
-- Collecte quotidienne à **12 h, fuseau Europe/Paris**.
+- Collecte quotidienne à **8 h, fuseau Europe/Paris**, avec changement d’heure automatique.
+- Seuls les jours terminés sont collectés : le jour en cours n’est pas estimé par le script.
 - Rattrapage des mois depuis janvier 2026.
 - Conservation des années passées : en 2027, l’archive 2026 reste disponible.
 - Actualisation des corrections et reprise des mois manquants après un échec.
@@ -249,13 +256,13 @@ Dans **Paramètres → Appareils et services → MQTT**, cherchez l’appareil *
 
 ### Capteurs de montants et d’énergie
 
-Douze capteurs couvrent les quatre mesures principales sur trois périodes :
+Dix-huit capteurs couvrent six mesures principales sur trois périodes :
 
-| Période | Coût électrique | Revenu injection | Consommation réseau | Injection réseau |
-|---|---|---|---|---|
-| Mois courant | EUR | EUR | kWh | kWh |
-| Veille | EUR | EUR | kWh | kWh |
-| Année courante | EUR | EUR | kWh | kWh |
+| Période | Coût électrique | Revenu injection | Consommation réseau | Injection réseau | Production solaire | Valorisation solaire |
+|---|---|---|---|---|---|---|
+| Mois courant | EUR | EUR | kWh | kWh | kWh | EUR |
+| Veille | EUR | EUR | kWh | kWh | kWh | EUR |
+| Année courante | EUR | EUR | kWh | kWh | kWh | EUR |
 
 Les noms des entités sont attribués par Home Assistant ; ils peuvent différer selon votre installation. Copiez l’identifiant exact depuis l’entité. Les quatre capteurs des versions antérieures conservent leurs identifiants uniques.
 
@@ -266,7 +273,7 @@ Les attributs communs comprennent :
 | `jours` | Journées du mois courant, du premier du mois jusqu’à hier. |
 | `mois_historique` | Totaux mensuels de l’année courante. |
 | `annees` | Totaux par année depuis 2026. |
-| `date_veille` | Date correspondant aux quatre valeurs de la veille. |
+| `date_veille` | Date correspondant aux six mesures de la veille. |
 | `mois_recuperes`, `mois_attendus` | Progression du rattrapage. |
 | `collecte_reussie_a` | Date de préparation des données publiées lors du passage réussi. |
 
@@ -278,7 +285,7 @@ L’état du capteur est le nombre de jours comportant au moins une mesure. Les 
 
 - `jours` : une entrée par date passée de l’année ;
 - `mois` : une entrée par mois commencé de l’année ;
-- `electricite`, `abonnement`, `injection`, `consommation_kwh`, `injection_kwh` : totaux annuels ;
+- `electricite`, `abonnement`, `injection`, `consommation_kwh`, `injection_kwh`, `production_kwh`, `production_eur` : totaux annuels ;
 - suffixes `_jours` et `_derniere_date` : couverture de chaque total ;
 - `jours_attendus`, `jours_enregistres`, `mois_recuperes` et `mois_attendus` : progression et disponibilité.
 
@@ -292,9 +299,19 @@ jours:
     injection: 0.82
     consommation_kwh: 24.6
     injection_kwh: 6.5
+    production_kwh: 12.0
+    production_eur: 1.70
+    tempo_eur:
+      Tempo-blue-HP: 2.40
+      Tempo-blue-HC: 1.20
+    tempo_kwh:
+      Tempo-blue-HP: 14.6
+      Tempo-blue-HC: 10.0
 ```
 
 Ici, l’abonnement de 0,75 € est **déjà inclus** dans les 4,35 €. Ne l’ajoutez pas une deuxième fois.
+
+Le détail Tempo est présent dans `jours` du mois courant et dans `jours` des archives annuelles. Les clés tarifaires absentes ne sont pas ajoutées artificiellement. Les objets mensuels et annuels ne contiennent pas de ventilation Tempo préagrégée : additionnez les journées de la période pour obtenir cette ventilation.
 
 Une mesure absente vaut `null`. Un zéro réel reste `0`. Les valeurs quotidiennes conservent leur précision source ; les totaux sont arrondis après addition, à deux décimales pour les euros et trois pour les kWh.
 
@@ -375,14 +392,14 @@ Pour un ancien mois, choisissez le capteur **Historique de l’année concernée
 
 ### Fréquence
 
-- Une tentative quotidienne à midi, heure de Paris, été comme hiver.
+- Une tentative quotidienne à 8 h, heure de Paris, été comme hiver.
 - Une seule connexion au compte par passage, puis plusieurs requêtes de données dans cette session.
 - Au plus douze mois traités par passage pendant le rattrapage.
 - Une fois le rattrapage terminé : actualisation du mois courant, du précédent et d’un ancien mois à tour de rôle.
 - Durée totale maximale de **600 secondes**, publication MQTT comprise.
 - Aucune nouvelle tentative automatique immédiate après une erreur.
 
-Le script s’arrête après son travail. Le planificateur reste actif pour le lendemain, y compris après un essai au démarrage en échec. Si le module est arrêté à midi, il n’existe pas de rattrapage horaire automatique ; un essai manuel reste possible.
+Le script s’arrête après son travail. Le planificateur reste actif pour le lendemain, y compris après un essai au démarrage en échec. Si le module est arrêté à 8 h, il n’existe pas de rattrapage horaire automatique ; un essai manuel reste possible.
 
 ### Reprise et données manquantes
 
@@ -411,7 +428,7 @@ Pour mettre à jour, remplacez les fichiers sources dans le dossier local exista
 |---|---|
 | `/data/options.json` | Configuration et identifiants, gérés par Home Assistant. |
 | `/data/hellowatt.sqlite` | Historique des jours et suivi des mois récupérés. |
-| `/data/hellowatt.sqlite.avant-0.3.0.bak` | Copie unique de la base existante avant la migration 0.3.0. |
+| `/data/hellowatt.sqlite.avant-0.5.0.bak` | Copie unique de la base existante avant la migration 0.5.0. |
 | `/data/last_attempt.txt` | Date de la dernière tentative. |
 | `/data/last_retry.txt` | Dernier identifiant d’essai manuel consommé. |
 | `/data/last_run.json` | Date et résultat du dernier passage. |
@@ -521,7 +538,7 @@ Vérifiez la date de collecte, les compteurs `_jours`, les dernières dates et l
 | `requirements.txt` | Requests et Paho MQTT. |
 | `collecteur.py` | Connexion, requêtes, normalisation, SQLite, agrégations et MQTT. |
 | `run.py` | Lecture des options, verrou, fréquence, essai manuel et délai maximal. |
-| `start.sh` | Planification à midi et démarrage de cron. |
+| `start.sh` | Planification à 8 h et démarrage de cron. |
 
 Le collecteur ouvre une session HTTP, obtient le cookie CSRF, poste le formulaire de connexion, puis consulte les données journalières par plages mensuelles. Les cookies restent en mémoire et sont effacés localement en fin de passage ; cela ne garantit pas la révocation de la session côté serveur.
 
@@ -543,6 +560,48 @@ Le module ne commande aucun équipement et ne modifie ni les intégrations Tesla
 - Construction ARM64 validée avec le Dockerfile Debian/Alpine ; l’architecture amd64 est déclarée mais n’a pas fait l’objet du même essai matériel.
 - Version 0.3.0 : calculs testés hors ligne sur un export de janvier à septembre 2026.
 - Tests couvrant la migration SQLite, les valeurs manquantes, les zéros, les corrections, la reprise mensuelle, les unités MQTT, les années bissextiles et le passage 2026 → 2027.
-- Le rattrapage complet 0.3.0 en conditions réelles reste à confirmer ; le succès de la construction ne garantit pas la disponibilité de chaque mois sur chaque compte.
+- Version 0.5.0 : tests hors ligne du détail Tempo, de sa conservation et de la cohérence des sommes avec les montants source. La disponibilité des données historiques, de production et de tarification dépend du compte Hello Watt ; les tests ne garantissent pas la présence de chaque mesure sur chaque compte.
 
 Pour signaler un problème, indiquez la version du module, l’architecture, l’étape en échec et un extrait de journal anonymisé. Ne joignez jamais de mot de passe, cookie, fichier options.json ou export HAR non nettoyé.
+
+## Production solaire — version 0.4.0
+
+La production solaire est récupérée depuis le 1er janvier 2026, en plus des mesures existantes :
+
+| Clé dans les attributs | Champ Hello Watt | Unité |
+|---|---|---|
+| `production_kwh` | `solarProductionValueKwh` | kWh |
+| `production_eur` | `solarProductionValueEur` | EUR |
+
+`production_eur` est la valorisation affichée par Hello Watt, reprise telle quelle. Ce n’est pas un revenu d’injection supplémentaire à additionner à `injection`. Le collecteur ne recalcule pas cette valorisation à partir d’un tarif supposé.
+
+Six capteurs sont ajoutés : **Production solaire** et **Valorisation solaire**, pour la veille, le mois courant et l’année courante. Les valeurs datées sont aussi présentes dans `jours`, `mois_historique`, `annees` et dans les attributs `jours` et `mois` des archives annuelles. Les anciennes années restent conservées.
+
+Après mise à jour, le suivi des mois de cette nouvelle version déclenche une relecture depuis janvier 2026, même si la version 0.3.0 avait déjà terminé son rattrapage. Les données existantes ne sont pas effacées. Au maximum douze mois par passage, puis reprise aux passages suivants si nécessaire. Les anciennes tables de suivi restent conservées. La routine quotidienne demeure inchangée.
+
+Pour lancer ce rattrapage immédiatement : mettre à jour sans désinstaller, renseigner `run_on_start: true` et `retry_once: solaire2026`, enregistrer puis démarrer Hello Watt. Après réussite, remettre `run_on_start: false` et `retry_once: ""`.
+
+Validation 0.4.0 : tests hors ligne des champs de production sur l’export réel, migration, rattrapage, conservation des années, zéros et données absentes. Le premier passage réel de cette version reste à vérifier dans les journaux. Le jour en cours reste exclu même si sa production partielle est déjà connue.
+
+Dans une carte utilisant les attributs, les nouvelles valeurs se lisent avec `j.production_kwh` ou `j.production_eur`. L’apparition des capteurs n’ajoute pas automatiquement une courbe de production dans un dashboard personnalisé.
+
+## Horaire — version 0.4.1
+
+La collecte quotidienne démarre désormais à **08:00, Europe/Paris**, avec adaptation automatique à l’heure d’été/hiver. Le déclenchement de midi est remplacé. Après remplacement des sources, mettre à jour le module pour reconstruire son image et vérifier qu’il est démarré. Conserver `run_on_start: false` et `retry_once: ""` pour attendre le prochain passage à 8 h. Si une tentative a déjà eu lieu dans la journée, elle reste comptabilisée. Les identifiants, les données et les règles de rattrapage sont conservés.
+
+
+## Couleurs Tempo — version 0.5.0
+
+Le collecteur conserve désormais le détail quotidien des six tarifs Tempo transmis par Hello Watt : bleu, blanc et rouge, chacun en heures creuses (HC) et heures pleines (HP). Ce détail est enregistré en euros et en kWh dans la base locale, puis publié dans les attributs `jours` des capteurs : `tempo_eur` et `tempo_kwh`, avec les clés `Tempo-blue-HC`, `Tempo-blue-HP`, `Tempo-white-HC`, `Tempo-white-HP`, `Tempo-red-HC` et `Tempo-red-HP`. Les valeurs manquantes ne sont pas remplacées par zéro.
+
+Le script fournit les données ; les couleurs et les graphiques dépendent de la carte de dashboard utilisée. Aucune carte personnalisée n’est installée par ce module.
+
+La carte Maison adaptative développée séparément peut afficher six segments en vue mensuelle et regrouper HP/HC en trois couleurs en vue annuelle. L’ordre, depuis la base, est abonnement gris (euros uniquement), rouge HP puis HC, blanc HP puis HC, bleu HP puis HC. Les montants HC restent inclus lorsqu’ils sont regroupés avec les HP. L’abonnement est déjà inclus dans le coût importé. Une ventilation absente ou incomplète ne doit pas être remplacée par des couleurs supposées.
+
+Les éventuelles estimations du jour affichées dans cette carte proviennent des capteurs locaux Home Assistant. Elles ne sont ni calculées, ni archivées, ni publiées par ce collecteur. Les réglages des véhicules, PAC, eau chaude et thèmes du dashboard sont indépendants du script.
+
+Mettre à jour le module sans le désinstaller : remplacer les fichiers locaux par ceux de cette version et lancer sa mise à jour pour reconstruire l’image. Le nouveau suivi de rattrapage relit les anciens mois depuis janvier 2026 pour compléter les tarifs, sans supprimer les montants existants ni les années précédentes. Une sauvegarde de migration est créée avant modification de la base existante.
+
+Pour lancer ce rattrapage immédiatement, utiliser `run_on_start: true` et une nouvelle valeur `retry_once: tempo2026`, puis démarrer le module. Après réussite, remettre `run_on_start: false` et `retry_once: ""`. Les couleurs apparaissent après cette collecte et le chargement de la nouvelle carte. La collecte quotidienne reste fixée à **08:00, Europe/Paris**. Aucun redémarrage complet de Home Assistant n’est nécessaire.
+
+Validation hors ligne : migration et conservation des archives, sommes des six tarifs et de l’abonnement sur les données exportées, valeurs nulles et corrections, rendu des trois formats de carte en euros/kWh et mois/année. La collecte connectée de cette version reste à vérifier après installation.

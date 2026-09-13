@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 os.umask(0o077)
 options = json.loads(Path('/data/options.json').read_text())
 if '--startup' in sys.argv and not options.get('run_on_start'):
-    print('Collecte programmée à midi (Europe/Paris).')
+    print('Collecte programmée à 8 h (Europe/Paris).')
     sys.exit(0)
 with open('/data/collect.lock', 'w') as lock:
     try:

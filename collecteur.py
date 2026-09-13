@@ -14,8 +14,9 @@ from zoneinfo import ZoneInfo
 BASE = 'https://www.hellowatt.fr'
 TZ = ZoneInfo('Europe/Paris')
 HISTORY_START = date(2026, 1, 1)
-METRICS = ('electricite', 'abonnement', 'injection', 'consommation_kwh', 'injection_kwh')
-COLUMNS = 'day,cost,subscription,injection,consumption_kwh,injection_kwh'
+TEMPO_KEYS = tuple('Tempo-'+color+'-'+period for color in ('blue', 'white', 'red') for period in ('HC', 'HP'))
+METRICS = ('electricite', 'abonnement', 'injection', 'consommation_kwh', 'injection_kwh', 'production_kwh', 'production_eur')
+COLUMNS = 'day,cost,subscription,injection,consumption_kwh,injection_kwh,production_kwh,production_eur'
 
 
 class CollectError(RuntimeError):
@@ -64,7 +65,11 @@ def normalize(payload, today):
         exported = row.get('injectionValueKwh')
         result.append((day.isoformat(), cost, subscription,
                        amount(injection) if injection is not None else None,
-                       consumption, amount(exported) if exported is not None else None))
+                       consumption, amount(exported) if exported is not None else None,
+                       amount(row['solarProductionValueKwh']) if row.get('solarProductionValueKwh') is not None else None,
+                       amount(row['solarProductionValueEur']) if row.get('solarProductionValueEur') is not None else None,
+                       {unit: {key: amount(source[key]) for key in TEMPO_KEYS if source.get(key) is not None}
+                        for unit, source in [('eur', detail), ('kwh', kwh)]}))
     return result
 
 
@@ -119,24 +124,34 @@ class Client:
 def ensure_schema(db):
     db.execute('CREATE TABLE IF NOT EXISTS days (home TEXT, day TEXT, cost TEXT, subscription TEXT, injection TEXT, PRIMARY KEY(home,day))')
     columns = {row[1] for row in db.execute('PRAGMA table_info(days)')}
-    for column in ('consumption_kwh', 'injection_kwh'):
+    for column in ('consumption_kwh', 'injection_kwh', 'production_kwh', 'production_eur'):
         if column not in columns:
             db.execute(f'ALTER TABLE days ADD COLUMN {column} TEXT')
-    db.execute('CREATE TABLE IF NOT EXISTS fetched_months (home TEXT, month TEXT, fetched_on TEXT, PRIMARY KEY(home,month))')
+    db.execute('CREATE TABLE IF NOT EXISTS tempo_days (home TEXT, day TEXT, unit TEXT, tariff TEXT, value TEXT, PRIMARY KEY(home,day,unit,tariff))')
+    db.execute('CREATE TABLE IF NOT EXISTS fetched_months_v05 (home TEXT, month TEXT, fetched_on TEXT, PRIMARY KEY(home,month))')
 
 
 def save(db, home_id, rows):
     ensure_schema(db)
     for row in rows:
-        if len(row) == 4:  # Compatibilité des imports monétaires antérieurs.
-            row = (*row, None, None)
-        db.execute("""INSERT INTO days (home,day,cost,subscription,injection,consumption_kwh,injection_kwh)
-            VALUES (?,?,?,?,?,?,?) ON CONFLICT(home,day) DO UPDATE SET
+        if len(row) == 9:
+            tariffs = row[-1]
+            row = row[:8]
+            for unit, values in tariffs.items():
+                for tariff, value in values.items():
+                    db.execute('INSERT INTO tempo_days VALUES (?,?,?,?,?) ON CONFLICT(home,day,unit,tariff) DO UPDATE SET value=excluded.value',
+                               (home_id, row[0], unit, tariff, amount(value)))
+        if len(row) in (4, 6):  # Imports des versions précédentes.
+            row = (*row, *((None,) * (8-len(row))))
+        db.execute("""INSERT INTO days (home,day,cost,subscription,injection,consumption_kwh,injection_kwh,production_kwh,production_eur)
+            VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(home,day) DO UPDATE SET
             cost=COALESCE(excluded.cost,days.cost),
             subscription=COALESCE(excluded.subscription,days.subscription),
             injection=COALESCE(excluded.injection,days.injection),
             consumption_kwh=COALESCE(excluded.consumption_kwh,days.consumption_kwh),
-            injection_kwh=COALESCE(excluded.injection_kwh,days.injection_kwh)""",
+            injection_kwh=COALESCE(excluded.injection_kwh,days.injection_kwh),
+            production_kwh=COALESCE(excluded.production_kwh,days.production_kwh),
+            production_eur=COALESCE(excluded.production_eur,days.production_eur)""",
             (home_id, *row))
 
 
@@ -168,6 +183,18 @@ def dated_days(rows, start, end):
     return result
 
 
+def with_tempo(db, home_id, days):
+    if not days:
+        return days
+    mapped = {day['date']: day for day in days}
+    records = db.execute('SELECT day,unit,tariff,value FROM tempo_days WHERE home=? AND day>=? AND day<=?',
+                         (home_id, days[0]['date'], days[-1]['date']))
+    for day, unit, tariff, value in records:
+        if day in mapped:
+            mapped[day].setdefault('tempo_'+unit, {})[tariff] = float(Decimal(value))
+    return days
+
+
 def daily_details(db, home_id, today):
     start = today.replace(day=1)
     rows = db.execute(f'SELECT {COLUMNS} FROM days WHERE home=? AND day>=? AND day<? ORDER BY day',
@@ -176,7 +203,7 @@ def daily_details(db, home_id, today):
     previous = db.execute(f'SELECT {COLUMNS} FROM days WHERE home=? AND day=?',
                           (home_id, yesterday.isoformat())).fetchall()
     amounts = aggregate(previous)
-    return {'jours': dated_days(rows, start, today), 'date_veille': yesterday.isoformat(),
+    return {'jours': with_tempo(db, home_id, dated_days(rows, start, today)), 'date_veille': yesterday.isoformat(),
             **{key+'_veille': amounts[key] for key in METRICS if key != 'abonnement'}}
 
 
@@ -189,7 +216,7 @@ def month_starts(today):
 
 def collection_plan(db, home_id, today):
     months = list(month_starts(today))
-    fetched = dict(db.execute('SELECT month,fetched_on FROM fetched_months WHERE home=?', (home_id,)))
+    fetched = dict(db.execute('SELECT month,fetched_on FROM fetched_months_v05 WHERE home=?', (home_id,)))
     recent = list(reversed(months[-2:]))
     missing = [m for m in months if m not in recent and m.isoformat()[:7] not in fetched]
     # Douze mois maximum par passage, reprise automatique des mois restants.
@@ -203,7 +230,7 @@ def collection_plan(db, home_id, today):
 
 def archives(db, home_id, today):
     result = {}
-    fetched = dict(db.execute('SELECT month,fetched_on FROM fetched_months WHERE home=?', (home_id,)))
+    fetched = dict(db.execute('SELECT month,fetched_on FROM fetched_months_v05 WHERE home=?', (home_id,)))
     for year in range(HISTORY_START.year, today.year+1):
         start, end = date(year, 1, 1), min(date(year+1, 1, 1), today)
         rows = db.execute(f'SELECT {COLUMNS} FROM days WHERE home=? AND day>=? AND day<? ORDER BY day',
@@ -221,7 +248,7 @@ def archives(db, home_id, today):
                            'recupere_le': fetched.get(key), **aggregate(monthly)})
         result[str(year)] = {'annee': str(year), 'devise': 'EUR', 'unite_energie': 'kWh',
                              'jours_attendus': (end-start).days,
-                             'jours': dated_days(rows, start, end), 'mois': months,
+                             'jours': with_tempo(db, home_id, dated_days(rows, start, end)), 'mois': months,
                              'jours_enregistres': sum(any(v is not None for v in r[1:]) for r in rows),
                              'mois_recuperes': sum(m['recupere_le'] is not None for m in months),
                              'mois_attendus': len(months), **aggregate(rows)}
@@ -245,7 +272,13 @@ def publish(state, home_id, history=None):
                        ('electricite_annee', 'Électricité annuelle abonnement inclus'),
                        ('injection_annee', 'Revenu injection annuel'),
                        ('consommation_kwh_annee', 'Consommation réseau annuelle'),
-                       ('injection_kwh_annee', 'Injection réseau annuelle')]:
+                       ('injection_kwh_annee', 'Injection réseau annuelle'),
+                       ('production_kwh', 'Production solaire mensuelle'),
+                       ('production_eur', 'Valorisation solaire mensuelle'),
+                       ('production_kwh_veille', 'Production solaire de la veille'),
+                       ('production_eur_veille', 'Valorisation solaire de la veille'),
+                       ('production_kwh_annee', 'Production solaire annuelle'),
+                       ('production_eur_annee', 'Valorisation solaire annuelle')]:
         config = {'name': label, 'unique_id': 'hellowatt_'+home_id+'_'+key,
             'state_topic': prefix+'/state', 'value_template': '{{ value_json.'+key+' }}',
             'unit_of_measurement': 'kWh' if '_kwh' in key else 'EUR',
@@ -286,7 +319,7 @@ def main():
     os.umask(0o077)
     start = today.replace(day=1)
     # Sauvegarde unique de la base existante avant ajout des colonnes kWh.
-    backup = args.db.with_name(args.db.name+'.avant-0.3.0.bak')
+    backup = args.db.with_name(args.db.name+'.avant-0.5.0.bak')
     if args.db.exists() and not backup.exists():
         with sqlite3.connect(args.db) as source, sqlite3.connect(backup) as target:
             source.backup(target)
@@ -312,7 +345,7 @@ def main():
                     rows = [r for r in rows if r[0].startswith(month.strftime('%Y-%m')+'-')]
                     save(db, home_id, rows)
                     if not payload.get('isFetchOngoing', False):
-                        db.execute('INSERT INTO fetched_months VALUES (?,?,?) ON CONFLICT(home,month) DO UPDATE SET fetched_on=excluded.fetched_on',
+                        db.execute('INSERT INTO fetched_months_v05 VALUES (?,?,?) ON CONFLICT(home,month) DO UPDATE SET fetched_on=excluded.fetched_on',
                                    (home_id, month.strftime('%Y-%m'), today.isoformat()))
                     db.commit()  # Chaque mois terminé est conservé même si le suivant échoue.
             finally:
