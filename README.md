@@ -149,11 +149,190 @@ Tempo-blue-HP    Tempo-blue-HC
 
 Ce détail se trouve dans `jours`, y compris dans les archives annuelles. Pour une ventilation mensuelle ou annuelle, additionnez les journées concernées. Les tarifs absents ne sont pas remplacés par des zéros supposés.
 
-### Afficher les jours précédents dans un graphique
+### Trouver les données dans les attributs
 
-L’historique récupéré est stocké dans des **attributs datés** : il n’est pas inséré rétroactivement dans l’historique natif de Home Assistant ni dans les statistiques du tableau Énergie.
+Un capteur Home Assistant contient deux choses différentes : son **état** (la valeur principale affichée) et ses **attributs** (les informations complémentaires).
 
-Utilisez une carte capable de lire ces attributs, par exemple [ApexCharts Card avec `data_generator`](https://github.com/RomRider/apexcharts-card#data_generator-option). Pour les anciens mois, utilisez les attributs du capteur d’historique de l’année correspondante.
+Par exemple, un capteur « Électricité mensuelle » peut afficher `65.87` comme état, tandis que son attribut `jours` contient le coût de chaque journée. Le capteur « Historique 2026 » affiche un nombre de jours comme état : les montants sont dans ses attributs, pas dans ce nombre.
+
+Pour consulter les données :
+
+1. Ouvrez **Paramètres → Appareils et services → MQTT**, puis l’appareil **Hello Watt**.
+2. Ouvrez le capteur souhaité et copiez son **identifiant d’entité**. Les noms peuvent varier selon votre installation.
+3. Allez dans **Outils de développement → États** et recherchez cet identifiant.
+4. Consultez la colonne ou la zone **Attributs**, notamment `jours`, `mois_historique` ou `mois`. Vous n’avez rien à modifier dans cet écran.
+
+Exemple fictif de l’attribut `jours` :
+
+```yaml
+jours:
+  - date: "2026-09-01"
+    electricite: 4.35
+    abonnement: 0.75
+    injection: 0.82
+    consommation_kwh: 24.6
+    injection_kwh: 6.5
+    production_kwh: 12.0
+    production_eur: 1.70
+  - date: "2026-09-02"
+    electricite: 3.20
+    abonnement: 0.75
+    injection: 0
+    consommation_kwh: 18.2
+    injection_kwh: 0
+    production_kwh: null
+    production_eur: null
+```
+
+Chaque élément correspond à **une date**, avec plusieurs mesures. Ici, `electricite: 4.35` est le coût de cette journée, abonnement déjà compris. `injection: 0` est un revenu nul réel ; `production_kwh: null` signifie que la mesure manque.
+
+**Quel capteur choisir ?**
+
+| Graphique souhaité | Où lire les données |
+|---|---|
+| Jours du mois courant | `jours` d’un capteur usuel Hello Watt |
+| Jours d’un ancien mois | `jours` du capteur Historique de l’année concernée ; filtrer les dates de ce mois |
+| Mois de l’année courante | `mois_historique` d’un capteur usuel, ou `mois` de l’archive annuelle |
+| Mois de 2026 après passage en 2027 | `mois` du capteur Historique 2026 |
+| Totaux par année | `annees` d’un capteur usuel |
+
+Une journée disponible dans les attributs n’apparaît pas automatiquement à sa date dans la courbe native du capteur : MQTT n’insère pas rétroactivement ces états dans l’historique Home Assistant. Le graphique doit donc **lire les attributs directement**.
+
+### Préparer un graphique avec ApexCharts Card
+
+[ApexCharts Card](https://github.com/RomRider/apexcharts-card) est une carte de dashboard facultative. **HACS est nécessaire pour cette méthode d’installation de la carte graphique, pas pour le collecteur Hello Watt.**
+
+1. Dans HACS, recherchez **ApexCharts Card**, puis téléchargez-la.
+2. Rechargez le navigateur si HACS le demande.
+3. Ouvrez votre dashboard → **Modifier → Ajouter une carte → Manuelle**.
+4. Collez l’un des exemples ci-dessous.
+5. Remplacez chaque identifiant `sensor.votre_…` par celui copié à l’étape précédente.
+
+Ne collez pas ces exemples dans la configuration de l’application Hello Watt : ils vont dans une **carte du dashboard**.
+
+### Exemple 1 — coût et revenu d’injection par jour du mois courant
+
+Remplacez les **deux occurrences** de `sensor.votre_capteur_hellowatt` par le même capteur Hello Watt disposant de l’attribut `jours`.
+
+```yaml
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Hello Watt · Coûts quotidiens
+  show_states: false
+graph_span: 31d
+span:
+  start: month
+all_series_config:
+  type: column
+  unit: €
+  float_precision: 2
+  show:
+    legend_value: false
+series:
+  - entity: sensor.votre_capteur_hellowatt
+    name: Électricité, abonnement inclus
+    color: "#38bdf8"
+    data_generator: |
+      const jours = entity.attributes.jours;
+      if (!Array.isArray(jours)) return [];
+      const mois = start.getFullYear() + '-' +
+        String(start.getMonth() + 1).padStart(2, '0');
+      return jours
+        .filter(j => typeof j.date === 'string' &&
+          j.date.startsWith(mois + '-') &&
+          typeof j.electricite === 'number' && Number.isFinite(j.electricite))
+        .map(j => [new Date(j.date + 'T12:00:00').getTime(), j.electricite])
+        .sort((a, b) => a[0] - b[0]);
+  - entity: sensor.votre_capteur_hellowatt
+    name: Revenu injection
+    color: "#ec4899"
+    data_generator: |
+      const jours = entity.attributes.jours;
+      if (!Array.isArray(jours)) return [];
+      const mois = start.getFullYear() + '-' +
+        String(start.getMonth() + 1).padStart(2, '0');
+      return jours
+        .filter(j => typeof j.date === 'string' &&
+          j.date.startsWith(mois + '-') &&
+          typeof j.injection === 'number' && Number.isFinite(j.injection))
+        .map(j => [new Date(j.date + 'T12:00:00').getTime(), j.injection])
+        .sort((a, b) => a[0] - b[0]);
+```
+
+Les deux barres d’une journée sont affichées côte à côte. Les revenus restent positifs ; ils ne sont pas additionnés au coût. Le graphique se met à jour lorsque MQTT actualise les attributs, sans recopier manuellement les journées.
+
+La fenêtre couvre 31 jours depuis le premier du mois. Pour un mois plus court, quelques jours vides peuvent apparaître à droite ; le filtre empêche d’y afficher des valeurs du mois suivant. Le jour en cours reste vide puisque le collecteur ne l’estime pas.
+
+### Comprendre et adapter le code
+
+`data_generator` transforme les attributs en une liste de points **[date, valeur]**. C’est le mécanisme prévu par [la documentation ApexCharts Card](https://github.com/RomRider/apexcharts-card#data_generator-option) pour tracer des données déjà présentes dans un capteur.
+
+- `entity.attributes.jours` lit les journées du capteur indiqué dans `entity`.
+- `.filter(...)` sélectionne le mois et écarte les mesures absentes. Les vrais zéros sont conservés.
+- `.map(...)` associe chaque date à sa mesure. Midi sert uniquement à placer la barre dans la journée ; ce n’est pas une heure de mesure.
+- `.sort(...)` classe les dates dans l’ordre chronologique.
+
+Pour changer la mesure, remplacez **toutes les occurrences du champ dans la série**, puis son `name` et son `unit` :
+
+| À tracer | Champ | Unité |
+|---|---|---|
+| Coût, abonnement inclus | `electricite` | € |
+| Abonnement seul | `abonnement` | € |
+| Revenu injection | `injection` | € |
+| Import réseau | `consommation_kwh` | kWh |
+| Injection réseau | `injection_kwh` | kWh |
+| Production solaire | `production_kwh` | kWh |
+| Valorisation solaire | `production_eur` | € |
+
+Par exemple, pour un graphique de production solaire quotidienne, conservez seulement la première série, remplacez ses trois occurrences de `j.electricite` par `j.production_kwh`, puis utilisez `name: Production solaire` et `unit: kWh`. Vous pouvez aussi remplacer l’unité dans `all_series_config` si toutes les séries sont en kWh. Évitez de mélanger euros et kWh sur un même axe.
+
+### Exemple 2 — production solaire par mois d’une année
+
+Choisissez le capteur **Historique de l’année courante** et remplacez `sensor.votre_historique_annee_courante`. Son attribut `mois` contient déjà les totaux mensuels : il n’est pas nécessaire de les recalculer depuis les journées.
+
+```yaml
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Hello Watt · Production mensuelle
+  show_states: false
+graph_span: 366d
+span:
+  start: year
+series:
+  - entity: sensor.votre_historique_annee_courante
+    name: Production solaire
+    type: column
+    unit: kWh
+    color: "#fbbf24"
+    float_precision: 1
+    show:
+      legend_value: false
+    data_generator: |
+      const mois = entity.attributes.mois;
+      if (!Array.isArray(mois)) return [];
+      const annee = String(start.getFullYear());
+      return mois
+        .filter(m => typeof m.mois === 'string' &&
+          m.mois.startsWith(annee + '-') &&
+          typeof m.production_kwh === 'number' && Number.isFinite(m.production_kwh))
+        .map(m => [new Date(m.mois + '-15T12:00:00').getTime(), m.production_kwh])
+        .sort((a, b) => a[0] - b[0]);
+```
+
+Le 15 du mois sert à positionner chaque barre mensuelle. Le mois en cours reste partiel. La fenêtre de 366 jours peut laisser un jour vide supplémentaire lors d’une année non bissextile.
+
+Au changement d’année, choisissez le nouveau capteur d’archive. **Changer seulement l’entité pour Historique 2026 ne suffit pas à afficher 2026 si la fenêtre du graphique montre 2027** : la période affichée doit elle aussi couvrir les dates souhaitées. De même, pour un ancien mois, utilisez ses journées dans l’archive annuelle et adaptez la fenêtre temporelle ainsi que le filtre. Les exemples ci-dessus suivent volontairement le mois ou l’année en cours.
+
+### Si le graphique est vide
+
+1. Vérifiez que l’identifiant d’entité existe et que l’attribut attendu contient une liste.
+2. Vérifiez que les dates de cette liste sont dans la période affichée par le graphique.
+3. Vérifiez que le champ choisi a des valeurs numériques : `null` signifie qu’aucune mesure n’est disponible.
+4. Si Home Assistant affiche « Custom element doesn't exist: apexcharts-card », terminez l’installation de la carte dans HACS, puis rechargez le navigateur.
+5. Ne remplacez pas les données absentes par `0` pour remplir le graphique : cela fausserait les résultats.
+
 
 ## Relancer une collecte manuellement
 
