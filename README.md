@@ -1,11 +1,10 @@
-
 # Hello Watt pour Home Assistant
 
 Récupérez vos données Hello Watt dans Home Assistant : **coût électrique abonnement inclus, revenu d’injection, consommation réseau, injection et production solaire en kWh, valorisation solaire en euros et détail des six tarifs Tempo**, avec le détail par jour, par mois et par année.
 
 Le collecteur se connecte une fois par jour, enregistre les données dans une base locale et publie les capteurs via MQTT. L’historique commence le **1er janvier 2026** et les années précédentes sont conservées.
 
-> Projet personnel non officiel, indépendant de Hello Watt. Il utilise les requêtes du site connecté, qui peuvent évoluer. Version décrite : **0.5.0**.
+> Projet personnel non officiel, indépendant de Hello Watt. Il utilise les requêtes du site connecté, qui peuvent évoluer. Version décrite : **0.6.0**.
 
 ## Sommaire
 
@@ -48,7 +47,9 @@ Le collecteur se connecte une fois par jour, enregistre les données dans une ba
 
 La consommation réseau n’inclut pas l’électricité solaire consommée directement dans le logement. L’injection correspond à l’énergie exportée, **pas à toute la production photovoltaïque**.
 
-<img width="1366" height="1024" alt="IMG_0594" src="https://github.com/user-attachments/assets/770fce45-9846-42f4-b115-3f8d1159c535" />
+![Exemple de dashboard Home Assistant : coûts, tarifs Tempo et statistiques solaires](docs/images/dashboard-hellowatt.png)
+
+*Exemple d’affichage avec une carte personnalisée distincte du collecteur.*
 
 ## Prérequis
 
@@ -68,7 +69,7 @@ Les libellés changent selon les versions : « Applications », « Apps », « M
 - Un compte accessible par **adresse e-mail et mot de passe**.
 - Un logement dont les données de consommation sont visibles sur le site.
 - Pour l’injection : les données d’injection doivent déjà être présentes sur le compte.
-- Le numéro interne du logement, appelé `home_id` dans ce projet.
+- Aucun numéro de logement à rechercher si le compte contient un seul logement : il est détecté après connexion.
 
 Le collecteur ne peut pas produire des mesures que Hello Watt ne possède pas. La connexion Google/Apple seule, les CAPTCHA et les parcours avec validation interactive ne sont pas implémentés.
 
@@ -155,22 +156,16 @@ Dans la boutique Home Assistant, ouvrez le menu `⋮` puis **Rechercher les mise
 
 En cas d’échec de construction, consultez les journaux **Supervisor**. Les journaux propres à Hello Watt concernent son exécution après installation.
 
-### 5. Trouver le numéro de logement Hello Watt
+### 5. Connexion Hello Watt : logement détecté automatiquement
 
-1. Connectez-vous à [Hello Watt → Mes données](https://www.hellowatt.fr/mon-compte/ma-consommation/mes-donnees).
-2. Ouvrez les outils de développement du navigateur : généralement `F12` ou `Ctrl+Maj+I` sous Windows/Linux, `⌘⌥I` sous Chrome sur macOS.
-3. Ouvrez l’onglet **Réseau / Network**.
-4. Rechargez la page et affichez les données de consommation.
-5. Filtrez les requêtes avec `conso_daily`.
-6. Dans l’URL d’une requête, repérez le nombre après `/api/homes/` :
+Renseignez votre adresse e-mail et votre mot de passe Hello Watt. Laissez `home_id: ""` : le module récupère la liste des logements après authentification. Aucune ouverture des outils de développement n’est nécessaire.
 
-```text
-https://www.hellowatt.fr/api/homes/123456/sge_measures/conso_daily?...
-                                      └────┘
-                                      home_id
-```
+- Un seul logement : sélection automatique.
+- Plusieurs logements et un seul logement déjà présent dans la base locale correspond à cette liste : conservation de ce logement.
+- Plusieurs logements sans choix unique : la collecte s’arrête en indiquant leurs numéros dans les journaux. Copiez le numéro souhaité dans `home_id`, puis demandez un nouvel essai manuel.
+- Aucun logement ou réponse inattendue : un message explicite est affiché et les données enregistrées restent conservées.
 
-`123456` est un exemple fictif : renseignez le numéro de votre logement. Aucun cookie, jeton CSRF ou export HAR n’est nécessaire pour configurer le module.
+Un `home_id` déjà renseigné reste prioritaire : la mise à jour ne change pas le logement sélectionné. La découverte automatique vérifie la liste accessible au compte à chaque collecte ; elle ne tente pas de deviner des numéros. Une liste paginée non prise en charge est signalée au lieu de sélectionner un résultat incomplet.
 
 ## Configuration
 
@@ -179,7 +174,7 @@ Dans **Hello Watt → Configuration**, renseignez les options. Exemple à rempla
 ```yaml
 email: "votre-adresse@example.com"
 password: "VOTRE_MOT_DE_PASSE_HELLO_WATT"
-home_id: "123456"
+home_id: ""
 mqtt_host: core-mosquitto
 mqtt_port: 1883
 mqtt_user: hellowatt_mqtt
@@ -193,7 +188,7 @@ retry_once: ""
 |---|---|
 | `email` | Adresse de connexion Hello Watt. |
 | `password` | Mot de passe Hello Watt, avec ses caractères habituels. |
-| `home_id` | Numéro du logement, composé de chiffres ; garder les guillemets en YAML. |
+| `home_id` | Facultatif. Vide = détection automatique ; un numéro explicite permet de choisir un logement et reste prioritaire. |
 | `mqtt_host` | `core-mosquitto` pour le module officiel local ; sinon adresse de votre broker. |
 | `mqtt_port` | `1883` pour l’exemple MQTT local sans TLS ; adapter au broker. |
 | `mqtt_user` | Utilisateur accepté par MQTT. |
@@ -608,3 +603,14 @@ Mettre à jour le module sans le désinstaller : remplacer les fichiers locaux p
 Pour lancer ce rattrapage immédiatement, utiliser `run_on_start: true` et une nouvelle valeur `retry_once: tempo2026`, puis démarrer le module. Après réussite, remettre `run_on_start: false` et `retry_once: ""`. Les couleurs apparaissent après cette collecte et le chargement de la nouvelle carte. La collecte quotidienne reste fixée à **08:00, Europe/Paris**. Aucun redémarrage complet de Home Assistant n’est nécessaire.
 
 Validation hors ligne : migration et conservation des archives, sommes des six tarifs et de l’abonnement sur les données exportées, valeurs nulles et corrections, rendu des trois formats de carte en euros/kWh et mois/année. La collecte connectée de cette version reste à vérifier après installation.
+
+
+## Détection du logement — version 0.6.0
+
+Cette version supprime la recherche manuelle du numéro de logement pour les comptes à logement unique. La connexion reste réalisée une fois par passage ; la liste des logements est lue avec cette même session authentifiée. Les topics MQTT restent fondés sur le numéro réel du logement, ce qui conserve les identifiants des capteurs et l’historique quand le logement reste le même.
+
+Mettre à jour le module sans le désinstaller, conserver les identifiants Hello Watt et MQTT, puis laisser le numéro existant ou vider `home_id` pour activer la découverte. Pour vérifier immédiatement : `run_on_start: true`, `retry_once: detection-logement-1`, puis redémarrer uniquement le module. Après réussite : `run_on_start: false` et `retry_once: ""`. La collecte quotidienne reste à 8 h, Europe/Paris.
+
+Le mode d’import hors ligne (`--import`) exige toujours `HELLOWATT_HOME_ID`, car il ne se connecte pas au compte. Cette version ne change pas le schéma de données ni le suivi de rattrapage Tempo de la version 0.5.0.
+
+Validation : route de liste `/api/homes` identifiée dans le code public de l’application Hello Watt ; tests hors ligne de sélection, ambiguïtés, réponses invalides et redirections, plus les huit tests d’historique existants. Le premier essai de découverte avec une session authentifiée reste à vérifier après installation. Le module MQTT et ses identifiants demeurent nécessaires : cette automatisation concerne la sélection du logement Hello Watt.

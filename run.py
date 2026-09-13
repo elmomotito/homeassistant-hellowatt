@@ -27,9 +27,9 @@ with open('/data/collect.lock', 'w') as lock:
     if marker.exists() and marker.read_text() == today and not manual_retry:
         print('Une tentative a déjà eu lieu aujourd’hui. Prochain passage demain.')
         sys.exit(0)
-    required = ['email', 'password', 'home_id', 'mqtt_host']
+    required = ['email', 'password', 'mqtt_host']
     if any(not options.get(k) for k in required):
-        print('Configuration incomplète : renseigner email, password, home_id et mqtt_host.')
+        print('Configuration incomplète : renseigner email, password et mqtt_host.')
         sys.exit(1)
     env = dict(os.environ)
     for option, variable in [('email','HELLOWATT_EMAIL'), ('password','HELLOWATT_PASSWORD'),

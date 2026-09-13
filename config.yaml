@@ -1,5 +1,5 @@
 name: Hello Watt — collecte quotidienne
-version: "0.5.0"
+version: "0.6.0"
 slug: hellowatt_daily
 description: Coût électrique et revenu d’injection mensuels, avec historique journalier.
 arch:
@@ -22,7 +22,7 @@ options:
 schema:
   email: str
   password: password
-  home_id: str
+  home_id: str?
   mqtt_host: str
   mqtt_port: port
   mqtt_user: str

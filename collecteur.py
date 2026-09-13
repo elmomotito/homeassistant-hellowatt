@@ -73,6 +73,31 @@ def normalize(payload, today):
     return result
 
 
+def select_home(payload, previous_ids=()):
+    rows = payload
+    if isinstance(payload, dict):
+        if payload.get('next'):
+            raise CollectError('Liste des logements paginée ; renseigner home_id manuellement.')
+        rows = payload.get('results', payload.get('homes'))
+    if not isinstance(rows, list):
+        raise CollectError('Format de la liste des logements inattendu ; renseigner home_id manuellement.')
+    ids = set()
+    for row in rows:
+        value = row.get('id') if isinstance(row, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (str, int)) or not str(value).isascii() or not str(value).isdigit():
+            raise CollectError('Identifiant de logement inattendu ; renseigner home_id manuellement.')
+        ids.add(str(value))
+    if not ids:
+        raise CollectError('Aucun logement trouvé sur ce compte Hello Watt.')
+    known = ids.intersection(str(value) for value in previous_ids)
+    if len(known) == 1:
+        return known.pop()
+    if len(ids) == 1:
+        return ids.pop()
+    raise CollectError('Plusieurs logements disponibles : ' + ', '.join(sorted(ids)) +
+                       '. Renseigner home_id pour sélectionner celui à collecter.')
+
+
 class Client:
     def __init__(self):
         import requests
@@ -105,6 +130,25 @@ class Client:
         if data.get('location') != '/login/redirect/' or not any(
                 c.name == 'sessionid' for c in self.session.cookies):
             raise CollectError('Connexion non confirmée; vérifier les identifiants ou le formulaire')
+
+    def discover_home(self, previous_ids=()):
+        """Liste authentifiée des logements ; aucune recherche par numéro supposé."""
+        print('Détection du logement Hello Watt.', flush=True)
+        response = self.request('GET', '/api/homes',
+            headers={'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'})
+        # Certains déploiements normalisent uniquement le slash final.
+        if response.status_code in (301, 302, 307, 308) and response.headers.get('Location') in ('/api/homes/', BASE + '/api/homes/'):
+            response = self.request('GET', '/api/homes/',
+                headers={'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'})
+        if response.status_code != 200:
+            raise CollectError('Liste des logements inaccessible ; renseigner home_id manuellement.')
+        try:
+            payload = response.json()
+        except ValueError:
+            raise CollectError('Liste des logements illisible ; renseigner home_id manuellement.') from None
+        home_id = select_home(payload, previous_ids)
+        print('Logement détecté : ' + home_id + '.', flush=True)
+        return home_id
 
     def month(self, home_id, start):
         end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
@@ -313,9 +357,11 @@ def main():
     if args.date and not args.import_file:
         p.error('--date est réservé aux imports')
     today = datetime.fromisoformat(args.date).date() if args.date else datetime.now(TZ).date()
-    home_id = os.environ.get('HELLOWATT_HOME_ID', '')
-    if not home_id.isdigit():
-        p.error('HELLOWATT_HOME_ID doit contenir le numéro du logement')
+    home_id = os.environ.get('HELLOWATT_HOME_ID', '').strip()
+    if home_id and (not home_id.isascii() or not home_id.isdigit()):
+        p.error('HELLOWATT_HOME_ID doit être vide ou contenir uniquement des chiffres')
+    if args.import_file and not home_id:
+        p.error('HELLOWATT_HOME_ID est requis pour un import hors ligne')
     os.umask(0o077)
     start = today.replace(day=1)
     # Sauvegarde unique de la base existante avant ajout des colonnes kWh.
@@ -334,6 +380,9 @@ def main():
             client = Client()
             try:
                 client.login(os.environ['HELLOWATT_EMAIL'], os.environ['HELLOWATT_PASSWORD'])
+                if not home_id:
+                    previous_ids = [row[0] for row in db.execute('SELECT DISTINCT home FROM days')]
+                    home_id = client.discover_home(previous_ids)
                 plan = collection_plan(db, home_id, today)
                 for month in plan:
                     print('Étape 3/5 : récupération du mois '+month.strftime('%Y-%m')+'.', flush=True)
