@@ -54,7 +54,6 @@ La consommation réseau n’inclut pas l’électricité solaire consommée dire
 
 *Exemple d’affichage avec une carte personnalisée distincte du collecteur.*
 
-<img width="1366" height="1024" alt="IMG_0594" src="https://github.com/user-attachments/assets/b1a4fb85-bde2-4027-b1cd-396b7807d6ea" />
 
 ## Prérequis
 
