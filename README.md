@@ -1,3 +1,4 @@
+
 # Hello Watt pour Home Assistant
 
 Récupérez vos données Hello Watt dans Home Assistant : **coût électrique abonnement inclus, revenu d’injection, consommation réseau, injection et production solaire en kWh, valorisation solaire en euros et détail des six tarifs Tempo**, avec le détail par jour, par mois et par année.
@@ -46,6 +47,8 @@ Le collecteur se connecte une fois par jour, enregistre les données dans une ba
 - Graphiques possibles depuis les attributs, sans attendre de constituer un nouvel historique.
 
 La consommation réseau n’inclut pas l’électricité solaire consommée directement dans le logement. L’injection correspond à l’énergie exportée, **pas à toute la production photovoltaïque**.
+
+<img width="1366" height="1024" alt="IMG_0594" src="https://github.com/user-attachments/assets/770fce45-9846-42f4-b115-3f8d1159c535" />
 
 ## Prérequis
 
