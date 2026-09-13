@@ -1,3 +1,4 @@
+
 # Hello Watt pour Home Assistant
 
 Récupérez vos données Hello Watt dans Home Assistant : **coût électrique abonnement inclus, revenu d’injection, consommation réseau, injection et production solaire en kWh, valorisation solaire en euros et détail des six tarifs Tempo**, avec le détail par jour, par mois et par année.
@@ -50,6 +51,8 @@ La consommation réseau n’inclut pas l’électricité solaire consommée dire
 ![Exemple de dashboard Home Assistant : coûts, tarifs Tempo et statistiques solaires](docs/images/dashboard-hellowatt.png)
 
 *Exemple d’affichage avec une carte personnalisée distincte du collecteur.*
+
+<img width="1366" height="1024" alt="IMG_0594" src="https://github.com/user-attachments/assets/dc09f5a8-ea2e-4281-8c60-3edd15c61fb5" />
 
 ## Prérequis
 
