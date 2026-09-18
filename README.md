@@ -4,7 +4,7 @@
 
 Retrouvez vos données Hello Watt dans Home Assistant, avec une **collecte quotidienne à 8 h**, un **logement détecté automatiquement** et un **historique conservé depuis janvier 2026**.
 
-**Version 0.6.0 · Projet non officiel, indépendant de Hello Watt.**
+**Version 0.6.2 · Projet non officiel, indépendant de Hello Watt.**
 
 ## Données disponibles
 
@@ -23,7 +23,7 @@ Le module conserve également la part de l’abonnement et le détail des **six 
 
 ![Exemple de dashboard Home Assistant : coûts, tarifs Tempo et statistiques solaires](docs/images/dashboard-hellowatt.png)
 
-*Exemple avec une carte personnalisée, non incluse dans ce dépôt. Le module fournit les données ; il ne crée pas ce dashboard. Les estimations du jour visibles sur la capture sont calculées par la carte à partir de capteurs locaux.*
+*Exemple du dashboard d’origine. La carte autonome incluse reprend la partie coût/graphique en haut ; les statistiques solaires en dessous ne font pas partie de cette carte. Les estimations du jour de cette capture nécessitent des capteurs locaux et ne sont pas activées par défaut.*
 
 ## Prérequis
 
@@ -103,6 +103,63 @@ retry_once: ""
 
 Gardez l’application **démarrée** et activez son **démarrage automatique**. Elle lancera les prochaines collectes à **8 h, heure de Paris**, avec adaptation à l’heure d’été/hiver. Aucun redémarrage complet de Home Assistant n’est nécessaire.
 
+## Carte Hello Watt incluse
+
+Depuis la version **0.6.2**, la carte est livrée avec l’application. Au démarrage, l’option `install_card: true` (par défaut) copie le JavaScript dans `/config/www/hellowatt/` et ajoute ou met à jour sa ressource Lovelace par l’API Home Assistant, avec une URL versionnée pour renouveler le cache. Aucun jeton personnel à renseigner.
+
+1. Démarrer l’application et vérifier le message **Ressource Hello Watt ajoutée**, **mise à jour** ou **déjà à jour** dans ses journaux.
+2. Actualiser la page Home Assistant.
+3. Modifier le dashboard, ajouter une **carte manuelle** et saisir :
+
+```yaml
+type: custom:hello-watt-cost-card
+```
+
+La carte reconnaît les capteurs du script : coût, revenu d’injection, net, graphique journalier/mensuel, vues Mois/Année et €/kWh, moyennes en pointillés. Elle lit directement les archives dans les attributs, y compris les années précédentes. Base, HP/HC et Tempo sont pris en charge lorsque Hello Watt fournit le détail. L’abonnement est placé au pied des barres.
+
+En cas d’injection gratuite, elle montre les kWh injectés sans revenu/net redondants. Sans injection, elle affiche le coût et la moyenne. Une donnée inconnue reste distincte d’un zéro. Les thèmes clair et sombre suivent Home Assistant ; la disposition s’adapte au téléphone et à la tablette.
+
+Options facultatives :
+
+```yaml
+type: custom:hello-watt-cost-card
+theme: auto # auto, light, dark
+period: month # month, year
+unit: eur # eur, kwh
+injection_mode: auto # auto, paid, free, none
+```
+
+Si vos entités ont été renommées :
+
+```yaml
+type: custom:hello-watt-cost-card
+energy:
+  hw_history_entities:
+    - sensor.hello_watt_historique_2026
+    - sensor.hello_watt_historique_2027
+```
+
+**Permissions utilisées :** accès en écriture au dossier de configuration pour copier uniquement `www/hellowatt/hello-watt-cost-card.js`, et accès à l’API Home Assistant pour déclarer la ressource. Les fichiers `.storage` et `configuration.yaml` ne sont pas édités. Le dashboard n’est pas modifié automatiquement. L’installation de la carte est indépendante de la collecte : une erreur n’empêche pas les capteurs de fonctionner. Aucun redémarrage de Home Assistant n’est déclenché.
+
+Pour désactiver cette installation, régler `install_card: false`. La carte déjà copiée et sa ressource restent en place ; supprimer la ressource manuellement si vous ne souhaitez plus l’utiliser. À chaque mise à jour de l’app, le fichier fourni remplace la copie installée : ne pas modifier directement cette copie.
+
+### Si la ressource ne s’ajoute pas automatiquement
+
+Lorsque les **ressources** sont gérées en YAML, ou si l’API refuse l’enregistrement, le journal donne l’URL à déclarer. En mode interface : **Paramètres → Tableaux de bord → ⋮ → Ressources → Ajouter une ressource**, type **Module JavaScript**. Activer le mode avancé du profil si nécessaire. Utiliser l’URL versionnée indiquée dans le journal.
+
+En mode ressources YAML, compléter la liste `resources` existante sous `lovelace` dans votre configuration (ne pas créer un deuxième bloc `lovelace`) :
+
+```yaml
+lovelace:
+  resources:
+    - url: /local/hellowatt/hello-watt-cost-card.js?v=0.6.2
+      type: module
+```
+
+Après les mises à jour, remplacer le suffixe `v` par celui indiqué dans les journaux, puis recharger les ressources et actualiser le navigateur. Si Home Assistant est indisponible au démarrage, l’installation tente six connexions espacées de 20 secondes avant de proposer ce recours manuel. Redémarrer uniquement l’application permet de retenter.
+
+Une ancienne ressource `/local/hello-watt-cost-card.js` est mise à jour automatiquement. Si plusieurs entrées de cette carte existent déjà, le journal demande d’en garder une seule. Si le dossier `www` vient d’être créé et que l’URL renvoie 404, un redémarrage ultérieur de Home Assistant peut être nécessaire pour activer `/local`.
+
 ## Fonctionnement quotidien
 
 - Le script se connecte une fois par passage, collecte les données, les sauvegarde puis se termine. Seul le planificateur reste actif jusqu’au lendemain.
@@ -137,7 +194,10 @@ Les entrées journalières utilisent les clés `date`, `electricite`, `abonnemen
 - `production_eur` reprend la valorisation de Hello Watt ; ce n’est pas un revenu à ajouter automatiquement à `injection`.
 - Une mesure absente reste `null`, un zéro réel reste `0`.
 
-### Détail Tempo
+### Détail des tarifs (Base, HP/HC, Tempo)
+
+Chaque journée peut contenir `tarifs_eur` et `tarifs_kwh` : les plages sont celles renvoyées par Hello Watt, hors abonnement conservé séparément. Les attributs `tempo_eur` et `tempo_kwh` restent compatibles avec les anciennes cartes. La ventilation n’est pas inventée si elle manque. Après passage depuis la 0.6.0, les mois sont relus progressivement (douze maximum par collecte) pour compléter ces détails.
+
 
 Chaque journée peut contenir `tempo_eur` et `tempo_kwh`, avec ces clés :
 
@@ -198,7 +258,9 @@ Chaque élément correspond à **une date**, avec plusieurs mesures. Ici, `elect
 
 Une journée disponible dans les attributs n’apparaît pas automatiquement à sa date dans la courbe native du capteur : MQTT n’insère pas rétroactivement ces états dans l’historique Home Assistant. Le graphique doit donc **lire les attributs directement**.
 
-### Préparer un graphique avec ApexCharts Card
+### Autre possibilité : préparer un graphique avec ApexCharts Card
+
+La carte incluse décrite plus haut suffit pour afficher les coûts et l’injection. Les exemples ApexCharts suivants sont facultatifs, pour construire vos propres graphiques.
 
 [ApexCharts Card](https://github.com/RomRider/apexcharts-card) est une carte de dashboard facultative. **HACS est nécessaire pour cette méthode d’installation de la carte graphique, pas pour le collecteur Hello Watt.**
 
@@ -380,4 +442,4 @@ Pour demander de l’aide, ouvrez une [issue](https://github.com/elmomotito/home
 - Un import hors ligne avec `--import` exige toujours un `HELLOWATT_HOME_ID` explicite.
 - TLS MQTT prend en charge les autorités de certification de l’image ; les certificats client et les autorités privées ne sont pas configurables.
 
-Le module utilise les requêtes du site Hello Watt, qui peuvent évoluer. La connexion et la publication MQTT ont été validées pendant le développement ; la construction a été testée sur ARM64. Les tests hors ligne couvrent la conservation de l’historique, les corrections, les tarifs Tempo et la sélection du logement. La détection automatique connectée et l’installation depuis le dépôt restent à confirmer sur les installations utilisatrices ; x86-64 est déclaré compatible sans le même essai matériel.
+Le module utilise les requêtes du site Hello Watt, qui peuvent évoluer. La collecte des versions précédentes a été utilisée sur ARM64. Pour cette version 0.6.2, les tests locaux couvrent le rendu, les tarifs, la conservation des données et l’installation de la ressource avec API simulée. La construction Docker et l’enregistrement sur une instance Home Assistant réelle restent à valider ; x86-64 n’a pas été essayé sur matériel réel.

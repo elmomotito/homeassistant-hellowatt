@@ -16,8 +16,9 @@ COPY --from=dependencies /wheels /wheels
 RUN python -m pip install --no-cache-dir --no-index \
     --find-links=/wheels -r requirements.txt \
     && python -m pip check \
-    && python -c 'import requests, paho.mqtt.client' \
+    && python -c 'import requests, paho.mqtt.client, websocket' \
     && rm -rf /wheels
-COPY collecteur.py run.py start.sh /app/
+COPY collecteur.py run.py start.sh install_card.py /app/
+COPY frontend /app/frontend
 RUN chmod +x /app/start.sh
 CMD ["/app/start.sh"]

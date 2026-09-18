@@ -68,7 +68,7 @@ def normalize(payload, today):
                        consumption, amount(exported) if exported is not None else None,
                        amount(row['solarProductionValueKwh']) if row.get('solarProductionValueKwh') is not None else None,
                        amount(row['solarProductionValueEur']) if row.get('solarProductionValueEur') is not None else None,
-                       {unit: {key: amount(source[key]) for key in TEMPO_KEYS if source.get(key) is not None}
+                       {unit: {key: amount(source[key]) for key in source if key != "subscription" and source.get(key) is not None}
                         for unit, source in [('eur', detail), ('kwh', kwh)]}))
     return result
 
@@ -172,7 +172,7 @@ def ensure_schema(db):
         if column not in columns:
             db.execute(f'ALTER TABLE days ADD COLUMN {column} TEXT')
     db.execute('CREATE TABLE IF NOT EXISTS tempo_days (home TEXT, day TEXT, unit TEXT, tariff TEXT, value TEXT, PRIMARY KEY(home,day,unit,tariff))')
-    db.execute('CREATE TABLE IF NOT EXISTS fetched_months_v05 (home TEXT, month TEXT, fetched_on TEXT, PRIMARY KEY(home,month))')
+    db.execute('CREATE TABLE IF NOT EXISTS fetched_months_v061 (home TEXT, month TEXT, fetched_on TEXT, PRIMARY KEY(home,month))')
 
 
 def save(db, home_id, rows):
@@ -182,6 +182,8 @@ def save(db, home_id, rows):
             tariffs = row[-1]
             row = row[:8]
             for unit, values in tariffs.items():
+                if values:
+                    db.execute('DELETE FROM tempo_days WHERE home=? AND day=? AND unit=?', (home_id, row[0], unit))
                 for tariff, value in values.items():
                     db.execute('INSERT INTO tempo_days VALUES (?,?,?,?,?) ON CONFLICT(home,day,unit,tariff) DO UPDATE SET value=excluded.value',
                                (home_id, row[0], unit, tariff, amount(value)))
@@ -235,7 +237,9 @@ def with_tempo(db, home_id, days):
                          (home_id, days[0]['date'], days[-1]['date']))
     for day, unit, tariff, value in records:
         if day in mapped:
-            mapped[day].setdefault('tempo_'+unit, {})[tariff] = float(Decimal(value))
+            mapped[day].setdefault('tarifs_'+unit, {})[tariff] = float(Decimal(value))
+            if tariff in TEMPO_KEYS:
+                mapped[day].setdefault('tempo_'+unit, {})[tariff] = float(Decimal(value))
     return days
 
 
@@ -260,7 +264,7 @@ def month_starts(today):
 
 def collection_plan(db, home_id, today):
     months = list(month_starts(today))
-    fetched = dict(db.execute('SELECT month,fetched_on FROM fetched_months_v05 WHERE home=?', (home_id,)))
+    fetched = dict(db.execute('SELECT month,fetched_on FROM fetched_months_v061 WHERE home=?', (home_id,)))
     recent = list(reversed(months[-2:]))
     missing = [m for m in months if m not in recent and m.isoformat()[:7] not in fetched]
     # Douze mois maximum par passage, reprise automatique des mois restants.
@@ -274,7 +278,7 @@ def collection_plan(db, home_id, today):
 
 def archives(db, home_id, today):
     result = {}
-    fetched = dict(db.execute('SELECT month,fetched_on FROM fetched_months_v05 WHERE home=?', (home_id,)))
+    fetched = dict(db.execute('SELECT month,fetched_on FROM fetched_months_v061 WHERE home=?', (home_id,)))
     for year in range(HISTORY_START.year, today.year+1):
         start, end = date(year, 1, 1), min(date(year+1, 1, 1), today)
         rows = db.execute(f'SELECT {COLUMNS} FROM days WHERE home=? AND day>=? AND day<? ORDER BY day',
@@ -394,7 +398,7 @@ def main():
                     rows = [r for r in rows if r[0].startswith(month.strftime('%Y-%m')+'-')]
                     save(db, home_id, rows)
                     if not payload.get('isFetchOngoing', False):
-                        db.execute('INSERT INTO fetched_months_v05 VALUES (?,?,?) ON CONFLICT(home,month) DO UPDATE SET fetched_on=excluded.fetched_on',
+                        db.execute('INSERT INTO fetched_months_v061 VALUES (?,?,?) ON CONFLICT(home,month) DO UPDATE SET fetched_on=excluded.fetched_on',
                                    (home_id, month.strftime('%Y-%m'), today.isoformat()))
                     db.commit()  # Chaque mois terminé est conservé même si le suivant échoue.
             finally:

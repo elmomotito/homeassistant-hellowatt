@@ -1,5 +1,5 @@
 name: Hello Watt — collecte quotidienne
-version: "0.6.0"
+version: "0.6.2"
 slug: hellowatt_daily
 url: https://github.com/elmomotito/homeassistant-hellowatt
 description: Coût électrique et revenu d’injection mensuels, avec historique journalier.
@@ -9,7 +9,13 @@ arch:
 startup: application
 boot: auto
 init: false
+homeassistant_api: true
+map:
+  - type: homeassistant_config
+    read_only: false
+    path: /homeassistant
 options:
+  install_card: true
   email: ""
   password: ""
   home_id: ""
@@ -21,6 +27,7 @@ options:
   run_on_start: false
   retry_once: ""
 schema:
+  install_card: bool?
   email: str
   password: password
   home_id: str?
