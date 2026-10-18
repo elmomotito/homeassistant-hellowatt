@@ -6,6 +6,9 @@ import json
 import os
 import sqlite3
 import sys
+import time
+import math
+from email.utils import parsedate_to_datetime
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -21,6 +24,45 @@ COLUMNS = 'day,cost,subscription,injection,consumption_kwh,injection_kwh,product
 
 class CollectError(RuntimeError):
     """Message contrôlé localement, sans contenu reçu du serveur."""
+
+
+
+class TemporaryError(CollectError):
+    """Échec transitoire, repris plus tard par le planificateur, jamais en boucle."""
+    def __init__(self, message, next_allowed_at=None):
+        super().__init__(message)
+        self.next_allowed_at = next_allowed_at
+
+
+def retry_after_seconds(value, now=None):
+    now = time.time() if now is None else now
+    if value:
+        try:
+            seconds = float(str(value).strip())
+            if math.isfinite(seconds) and seconds >= 0:
+                return seconds
+        except (TypeError, ValueError, OverflowError):
+            pass
+        try:
+            moment = parsedate_to_datetime(str(value))
+            if moment.tzinfo is not None:
+                return max(0, moment.timestamp()-now)
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return 3600
+
+
+def write_failure_status(exc):
+    filename = os.environ.get('HELLOWATT_STATUS_FILE')
+    if not filename:
+        return
+    value = {'retryable': isinstance(exc, TemporaryError)}
+    if isinstance(exc, TemporaryError) and exc.next_allowed_at is not None:
+        value['next_allowed_at'] = exc.next_allowed_at
+    path = Path(filename)
+    temporary = path.with_suffix(path.suffix+'.tmp')
+    temporary.write_text(json.dumps(value))
+    temporary.replace(path)
 
 
 def error_message(exc):
@@ -102,14 +144,29 @@ class Client:
     def __init__(self):
         import requests
         self.session = requests.Session()
-        self.session.headers['User-Agent'] = 'HelloWatt-HA-personal-collector/0.1'
+        self.session.headers['User-Agent'] = 'HelloWatt-HA-personal-collector/0.6.3'
+        self._network_errors = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
+        self._last_request = None
 
     def request(self, method, path, **kwargs):
-        # Ne jamais suivre une redirection vers une autre origine avec des identifiants.
-        response = self.session.request(method, BASE + path, timeout=(10, 45),
-                                        allow_redirects=False, **kwargs)
+        # Espacer aussi les appels d'une collecte historique. Aucun contournement
+        # du service : un 429 arrête immédiatement cette collecte.
+        if self._last_request is not None:
+            time.sleep(max(0, 1.0-(time.monotonic()-self._last_request)))
+        self._last_request = time.monotonic()
+        try:
+            response = self.session.request(method, BASE + path, timeout=(10, 45),
+                                            allow_redirects=False, **kwargs)
+        except self._network_errors:
+            raise TemporaryError('Connexion Hello Watt temporairement indisponible ; reprise différée.') from None
+        if response.status_code == 429:
+            now = time.time()
+            delay = retry_after_seconds(response.headers.get('Retry-After'), now)
+            raise TemporaryError('Hello Watt HTTP 429 ; collecte mise en pause, reprise différée.', now+delay)
+        if response.status_code == 408 or 500 <= response.status_code <= 599:
+            raise TemporaryError(f'Hello Watt HTTP {response.status_code} ; reprise différée.')
         if response.status_code >= 400:
-            raise CollectError(f'Hello Watt HTTP {response.status_code}; aucune nouvelle tentative automatique')
+            raise CollectError(f'Hello Watt HTTP {response.status_code} ; vérifier la connexion ou les autorisations.')
         return response
 
     def login(self, email, password):
@@ -429,5 +486,9 @@ if __name__ == '__main__':
         main()
     except Exception as exc:
         # Aucune réponse HTTP, URL authentifiée ou information de connexion dans les logs.
+        try:
+            write_failure_status(exc)
+        except OSError:
+            print('Écriture du statut de reprise impossible.', file=sys.stderr)
         print(error_message(exc) + ' Les données enregistrées sont conservées.', file=sys.stderr)
-        sys.exit(1)
+        sys.exit(75 if isinstance(exc, TemporaryError) else 1)

@@ -1,3 +1,9 @@
+# 0.6.3
+
+- Reprise différée persistante après HTTP 429, respect de Retry-After.
+- Quatre essais automatiques maximum ; distinction échec/réussite.
+- Espacement des appels ; conservation des historiques et options.
+
 ## 0.6.2
 
 - Carte Hello Watt embarquée, installation et enregistrement automatique de la ressource au démarrage (désactivable avec `install_card`).
