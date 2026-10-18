@@ -1,3 +1,10 @@
+# 0.6.4
+- Session authentifiée conservée dans /data avec permissions 0600 et cookies limités au domaine Hello Watt.
+- Réutilisation après redémarrage ; une reconnexion seulement en cas de session expirée (401 ou redirection de connexion).
+- Aucun nouvel essai de connexion sur 429/403 ; pauses serveur conservées.
+- Diagnostics HTTP 429 sans cookies, identifiants ni corps de réponse.
+- 37 tests hors ligne, dont sept scénarios de session.
+
 # 0.6.3
 
 - Reprise différée persistante après HTTP 429, respect de Retry-After.

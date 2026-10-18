@@ -2,6 +2,8 @@
 Sans --publish : sauvegarde locale uniquement. --import permet un essai hors ligne.
 """
 import argparse
+import hashlib
+import tempfile
 import json
 import os
 import sqlite3
@@ -25,6 +27,10 @@ COLUMNS = 'day,cost,subscription,injection,consumption_kwh,injection_kwh,product
 class CollectError(RuntimeError):
     """Message contrôlé localement, sans contenu reçu du serveur."""
 
+
+
+class SessionExpired(CollectError):
+    """Session authentifiée expirée ; une seule reconnexion autorisée."""
 
 
 class TemporaryError(CollectError):
@@ -144,9 +150,82 @@ class Client:
     def __init__(self):
         import requests
         self.session = requests.Session()
-        self.session.headers['User-Agent'] = 'HelloWatt-HA-personal-collector/0.6.3'
+        self.session.headers['User-Agent'] = 'HelloWatt-HA-personal-collector/0.6.4'
         self._network_errors = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
         self._last_request = None
+
+    def authenticate(self, email, password, session_path, previous_ids=(), home_id=''):
+        self.session_path = Path(session_path)
+        self.session_owner = hashlib.sha256((email+'\0'+password).encode()).hexdigest()
+        self.authenticated = False
+        self.credentials = (email, password)
+        self.reconnected = False
+        if self.load_session():
+            print('Session enregistrée : vérification sans nouvelle connexion.', flush=True)
+            try:
+                detected = self.discover_home([home_id] if home_id else previous_ids)
+            except SessionExpired:
+                self.session.cookies.clear()
+                self.session_path.unlink(missing_ok=True)
+                print('Session expirée : une reconnexion nécessaire.', flush=True)
+            else:
+                self.authenticated = True
+                self.save_session()
+                return home_id or detected
+        self.reconnected = True
+        self.login(email, password)
+        self.authenticated = True
+        # Conserver la session dès la connexion, même si la collecte suivante échoue.
+        self.save_session()
+        return home_id or self.discover_home(previous_ids)
+
+    def load_session(self):
+        import requests
+        try:
+            if self.session_path.is_symlink():
+                return False
+            payload = json.loads(self.session_path.read_text())
+            if payload.get('owner') != self.session_owner:
+                return False
+            cookies = payload['cookies']
+            if not isinstance(cookies, list) or len(cookies) > 100:
+                return False
+            now = time.time()
+            valid = []
+            for item in cookies:
+                if item.get('domain', '').lstrip('.') not in ('hellowatt.fr', 'www.hellowatt.fr'):
+                    continue
+                if item.get('expires') is not None and item['expires'] <= now:
+                    continue
+                valid.append(requests.cookies.create_cookie(**item))
+            if not any(cookie.name == 'sessionid' for cookie in valid):
+                return False
+            self.session.cookies.clear()
+            for cookie in valid:
+                self.session.cookies.set_cookie(cookie)
+            return True
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+
+    def save_session(self):
+        if not getattr(self, 'authenticated', False):
+            return
+        cookies = [dict(name=c.name, value=c.value, domain=c.domain, path=c.path,
+                        secure=c.secure, expires=c.expires, rest=c._rest)
+                   for c in self.session.cookies
+                   if c.domain.lstrip('.') in ('hellowatt.fr', 'www.hellowatt.fr')
+                   and not c.is_expired()]
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', dir=self.session_path.parent,
+                                             prefix='.hellowatt-session-', delete=False) as stream:
+                temporary = Path(stream.name)
+                os.fchmod(stream.fileno(), 0o600)
+                json.dump({'owner': self.session_owner, 'cookies': cookies}, stream)
+            temporary.replace(self.session_path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def request(self, method, path, **kwargs):
         # Espacer aussi les appels d'une collecte historique. Aucun contournement
@@ -162,9 +241,17 @@ class Client:
         if response.status_code == 429:
             now = time.time()
             delay = retry_after_seconds(response.headers.get('Retry-After'), now)
+            stage = 'connexion' if path.startswith('/accounts/') else 'API de données'
+            print(f'HTTP 429 sur {stage} ({method}) ; délai serveur fourni : '+
+                  ('oui' if response.headers.get('Retry-After') else 'non, pause locale par défaut')+'.', flush=True)
             raise TemporaryError('Hello Watt HTTP 429 ; collecte mise en pause, reprise différée.', now+delay)
         if response.status_code == 408 or 500 <= response.status_code <= 599:
             raise TemporaryError(f'Hello Watt HTTP {response.status_code} ; reprise différée.')
+        if path.startswith('/api/') and (response.status_code == 401 or
+                (response.status_code in (301, 302, 303, 307, 308) and
+                 response.headers.get('Location', '').split('?')[0] in
+                 ('/accounts/login/', '/login/', BASE+'/accounts/login/', BASE+'/login/'))):
+            raise SessionExpired('Session Hello Watt expirée.')
         if response.status_code >= 400:
             raise CollectError(f'Hello Watt HTTP {response.status_code} ; vérifier la connexion ou les autorisations.')
         return response
@@ -208,6 +295,22 @@ class Client:
         return home_id
 
     def month(self, home_id, start):
+        try:
+            return self._month(home_id, start)
+        except SessionExpired:
+            if getattr(self, 'reconnected', True):
+                raise
+            self.reconnected = True
+            self.authenticated = False
+            self.session.cookies.clear()
+            self.session_path.unlink(missing_ok=True)
+            print('Session expirée pendant la collecte : une reconnexion.', flush=True)
+            self.login(*self.credentials)
+            self.authenticated = True
+            self.save_session()
+            return self._month(home_id, start)
+
+    def _month(self, home_id, start):
         end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
         response = self.request('GET', f'/api/homes/{home_id}/sge_measures/conso_daily',
             params={'startDate': datetime.combine(start, datetime.min.time(), TZ).isoformat(),
@@ -218,8 +321,10 @@ class Client:
         return response.json()
 
     def close(self):
+        self.save_session()
         self.session.cookies.clear()
         self.session.close()
+        self.credentials = None
 
 
 def ensure_schema(db):
@@ -440,10 +545,9 @@ def main():
         else:
             client = Client()
             try:
-                client.login(os.environ['HELLOWATT_EMAIL'], os.environ['HELLOWATT_PASSWORD'])
-                if not home_id:
-                    previous_ids = [row[0] for row in db.execute('SELECT DISTINCT home FROM days')]
-                    home_id = client.discover_home(previous_ids)
+                previous_ids = [row[0] for row in db.execute('SELECT DISTINCT home FROM days')]
+                home_id = client.authenticate(os.environ['HELLOWATT_EMAIL'], os.environ['HELLOWATT_PASSWORD'],
+                    args.db.with_name('hellowatt-session.json'), previous_ids, home_id)
                 plan = collection_plan(db, home_id, today)
                 for month in plan:
                     print('Étape 3/5 : récupération du mois '+month.strftime('%Y-%m')+'.', flush=True)
