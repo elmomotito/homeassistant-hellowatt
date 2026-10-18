@@ -4,7 +4,7 @@
 
 Retrouvez vos données Hello Watt dans Home Assistant, avec une **collecte quotidienne à 8 h**, un **logement détecté automatiquement** et un **historique conservé depuis janvier 2026**.
 
-**Version 0.6.2 · Projet non officiel, indépendant de Hello Watt.**
+**Version 0.6.3 · Projet non officiel, indépendant de Hello Watt.**
 
 ## Données disponibles
 
@@ -163,7 +163,7 @@ Une ancienne ressource `/local/hello-watt-cost-card.js` est mise à jour automat
 ## Fonctionnement quotidien
 
 - Le script se connecte une fois par passage, collecte les données, les sauvegarde puis se termine. Seul le planificateur reste actif jusqu’au lendemain.
-- Une tentative automatique au maximum est autorisée par journée. En cas d’échec, les anciennes données sont conservées.
+- Une collecte réussie au maximum par journée. Les erreurs transitoires (429, 5xx, réseau) permettent jusqu’à quatre essais automatiques espacés ; les anciennes données sont conservées. Le délai Retry-After est respecté, y compris après redémarrage.
 - Le **jour en cours est exclu** : la dernière journée attendue est celle de la veille, sous réserve qu’elle soit disponible chez Hello Watt.
 - Le premier passage rattrape l’historique depuis le **1er janvier 2026**, avec un maximum de douze mois interrogés par passage. Le rattrapage continue lors des passages suivants si nécessaire.
 - Les collectes suivantes relisent les périodes récentes et revisitent progressivement les anciens mois pour récupérer les corrections.
@@ -405,7 +405,7 @@ run_on_start: true
 retry_once: "essai-1"
 ```
 
-Enregistrez puis redémarrez **uniquement l’application Hello Watt**. Utilisez une nouvelle valeur (`essai-2`, etc.) pour chaque essai supplémentaire. Après réussite, remettez `run_on_start: false` et `retry_once: ""`.
+Enregistrez puis redémarrez **uniquement l’application Hello Watt**. Utilisez une nouvelle valeur (`essai-2`, etc.) pour un essai manuel supplémentaire. Cette option ne contourne jamais la pause imposée après un HTTP 429. Après réussite, remettez `run_on_start: false` et `retry_once: ""`.
 
 ## Mise à jour et sauvegardes
 
@@ -424,7 +424,7 @@ La base locale est stockée dans `/data/hellowatt.sqlite`, à l’intérieur de 
 | Échec de connexion Hello Watt | Identifiants, connexion par e-mail/mot de passe et étape indiquée dans les journaux |
 | Plusieurs logements détectés | Renseigner `home_id` avec le numéro voulu indiqué dans les journaux |
 | Collecte réussie mais aucun capteur | Broker et intégration MQTT démarrés ; hôte, port et identifiants corrects |
-| Pas de nouveau passage après un redémarrage | Une tentative a déjà eu lieu aujourd’hui ; utiliser un nouveau `retry_once` pour relancer |
+| Pas de nouveau passage après un redémarrage | Une réussite a déjà eu lieu, une pause serveur est active ou la limite de quatre essais est atteinte ; consulter le prochain horaire annoncé |
 | Données anciennes ou incomplètes | Dernière collecte réussie, progression du rattrapage et disponibilité réelle sur Hello Watt |
 | Historique natif vide pour les anciens jours | Utiliser les attributs `jours` des capteurs d’historique dans votre graphique |
 
@@ -443,3 +443,10 @@ Pour demander de l’aide, ouvrez une [issue](https://github.com/elmomotito/home
 - TLS MQTT prend en charge les autorités de certification de l’image ; les certificats client et les autorités privées ne sont pas configurables.
 
 Le module utilise les requêtes du site Hello Watt, qui peuvent évoluer. La collecte des versions précédentes a été utilisée sur ARM64. Pour cette version 0.6.2, les tests locaux couvrent le rendu, les tarifs, la conservation des données et l’installation de la ressource avec API simulée. La construction Docker et l’enregistrement sur une instance Home Assistant réelle restent à valider ; x86-64 n’a pas été essayé sur matériel réel.
+
+
+### Correctif 0.6.3
+
+Les 30 tests hors ligne du correctif couvrent les reprises HTTP, la planification,
+les archives et MQTT. La construction et l’activation de cette version dans
+Home Assistant doivent être confirmées après mise à jour. Voir `CORRECTIF-429.md`.
