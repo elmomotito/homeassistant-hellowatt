@@ -106,7 +106,7 @@ class HistoryTests(unittest.TestCase):
             with sqlite3.connect(path) as db:
                 c.save(db, '1', [('2026-01-01', '2', '.5', '1')])
             class FakeClient:
-                def login(self, *args): pass
+                def authenticate(self, *args): return args[-1]
                 def close(self): pass
                 def month(self, home, month):
                     if month.month == 1:

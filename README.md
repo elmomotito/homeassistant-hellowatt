@@ -4,7 +4,7 @@
 
 Retrouvez vos données Hello Watt dans Home Assistant, avec une **collecte quotidienne à 8 h**, un **logement détecté automatiquement** et un **historique conservé depuis janvier 2026**.
 
-**Version 0.6.3 · Projet non officiel, indépendant de Hello Watt.**
+**Version 0.6.4 · Projet non officiel, indépendant de Hello Watt.**
 
 ## Données disponibles
 
@@ -450,3 +450,7 @@ Le module utilise les requêtes du site Hello Watt, qui peuvent évoluer. La col
 Les 30 tests hors ligne du correctif couvrent les reprises HTTP, la planification,
 les archives et MQTT. La construction et l’activation de cette version dans
 Home Assistant doivent être confirmées après mise à jour. Voir `CORRECTIF-429.md`.
+
+
+### Session persistante — 0.6.4
+Les cookies authentifiés sont conservés dans `/data/hellowatt-session.json` (permissions 0600), jamais dans `/config/www` ou MQTT. Ce fichier est un secret : ne pas le partager et protéger les sauvegardes de l’application. Un changement d’identifiants invalide la réutilisation. La session est vérifiée via la liste des logements ; une expiration déclenche au plus une reconnexion par passage. Un 403 ou 429 ne déclenche pas de reconnexion immédiate. Une première connexion réussie reste nécessaire : cette fonction ne lève pas un blocage existant de la page de connexion et ne prolonge pas la durée autorisée par Hello Watt. Les 37 tests hors ligne passent.
